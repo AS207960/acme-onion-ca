@@ -1,0 +1,10 @@
+drop table order_authorization;
+drop table authorization_challenges;
+drop type challenge_type;
+drop table authorizations;
+drop type authorization_state;
+drop table order_identifiers;
+drop type identifier_type;
+drop table orders;
+drop table certificate;
+drop table issuing_certs;
