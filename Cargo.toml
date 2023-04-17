@@ -6,9 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-diesel = { version = "2", features = ["uuid", "extras", "chrono"] }
+diesel = { version = "2", features = ["uuid", "extras", "chrono", "postgres"] }
 diesel-async = { version = "0.2.1", features = ["postgres", "mobc"] }
 diesel-derive-enum = { version = "2", features = ["postgres"] }
+diesel_migrations = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json = "1"

@@ -23,7 +23,12 @@ struct Config {
 type DBPool = diesel_async::pooled_connection::mobc::Pool<diesel_async::AsyncPgConnection>;
 type DBConn = mobc::Connection<diesel_async::pooled_connection::AsyncDieselConnectionManager<diesel_async::AsyncPgConnection>>;
 
+pub const MIGRATIONS: diesel_migrations::EmbeddedMigrations = diesel_migrations::embed_migrations!("migrations");
+
 fn main() {
+    use diesel_migrations::MigrationHarness;
+    use diesel::Connection;
+
     pretty_env_logger::init();
 
     info!("Loading config");
@@ -68,6 +73,19 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    info!("Running migrations");
+    let mut conn = match diesel::pg::PgConnection::establish(&config.database_url)  {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to get database connection: {}", e);
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = conn.run_pending_migrations(MIGRATIONS) {
+        error!("Failed to run migrations: {}", e);
+        std::process::exit(1);
+    }
 
     let db_config = diesel_async::pooled_connection::AsyncDieselConnectionManager::<diesel_async::AsyncPgConnection>::new(config.database_url);
     let db_pool = DBPool::new(db_config);
