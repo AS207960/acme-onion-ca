@@ -1,3 +1,53 @@
 listen = "[::1]:50051"
 database_url = "postgres://q@localhost/acme_ca"
 validator_url = "http://[::1]:50052"
+issuing_cert_id = "4874c9e7-d138-4117-868b-6b24b061f15e"
+private_key_path = "/Users/q/Documents/bjorn/python-ca/ca-certs/intermediate-key.pem"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/crucible"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/testtube"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/solera2018"
+[ct_logs.expiry_range]
+start = "2018-01-01T00:00:00Z"
+end = "2019-01-01T00:00:00Z"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/solera2019"
+[ct_logs.expiry_range]
+start = "2019-01-01T00:00:00Z"
+end = "2020-01-01T00:00:00Z"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/solera2020"
+[ct_logs.expiry_range]
+start = "2020-01-01T00:00:00Z"
+end = "2021-01-01T00:00:00Z"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/solera2021"
+[ct_logs.expiry_range]
+start = "2021-01-01T00:00:00Z"
+end = "2022-01-01T00:00:00Z"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/solera2022"
+[ct_logs.expiry_range]
+start = "2022-01-01T00:00:00Z"
+end = "2023-01-01T00:00:00Z"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/solera2023"
+[ct_logs.expiry_range]
+start = "2023-01-01T00:00:00Z"
+end = "2024-01-01T00:00:00Z"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/solera2024"
+[ct_logs.expiry_range]
+start = "2024-01-01T00:00:00Z"
+end = "2025-01-01T00:00:00Z"
