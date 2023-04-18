@@ -9,6 +9,7 @@ mod schema;
 mod models;
 mod ca;
 mod sct;
+mod ocsp;
 
 pub mod cert_order {
     tonic::include_proto!("cert_order");
@@ -206,6 +207,7 @@ fn main() {
         signing_key: private_key.into(),
     };
     let server_future = tonic::transport::Server::builder()
+        .add_service(cert_order::ocsp_server::OcspServer::new(ca.clone()))
         .add_service(cert_order::ca_server::CaServer::new(ca))
         .serve(config.listen);
 

@@ -34,7 +34,7 @@ pub(crate) struct CA {
 }
 
 impl CA {
-    async fn get_db_conn(&self) -> Result<crate::DBConn, tonic::Status> {
+    pub(crate) async fn get_db_conn(&self) -> Result<crate::DBConn, tonic::Status> {
         match self.db.get().await {
             Ok(c) => Ok(c),
             Err(e) => {
@@ -591,7 +591,7 @@ impl CA {
     }
 }
 
-fn handle_db_result<O>(res: QueryResult<O>) -> Result<O, tonic::Status> {
+pub(crate) fn handle_db_result<O>(res: QueryResult<O>) -> Result<O, tonic::Status> {
     match res {
         Ok(res) => Ok(res),
         Err(e) => {
