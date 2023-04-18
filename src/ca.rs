@@ -463,7 +463,7 @@ impl CA {
         }
 
         let certificate = crate::models::Certificate {
-            id: uuid::Uuid::new_v4(),
+            id: cert_id,
             acme_account_id: order.acme_account_id.clone(),
             ee_cert: ee_cert_bytes,
             issued_at: now.naive_utc(),
