@@ -2,7 +2,7 @@ listen = "[::1]:50051"
 database_url = "postgres://q@localhost/acme_ca"
 validator_url = "http://[::1]:50052"
 issuing_cert_id = "4874c9e7-d138-4117-868b-6b24b061f15e"
-private_key_path = "/Users/q/Documents/bjorn/python-ca/ca-certs/intermediate-key.pem"
+signing_key = "/Users/q/Documents/bjorn/python-ca/ca-certs/intermediate-key.pem"
 
 [[ct_logs]]
 url = "https://ct.googleapis.com/logs/crucible"

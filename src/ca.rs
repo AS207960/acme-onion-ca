@@ -24,6 +24,12 @@ impl mobc::Manager for ValidatorManager {
 }
 
 #[derive(Clone)]
+enum ChallengeResponse {
+    None,
+    CSR(Vec<u8>)
+}
+
+#[derive(Clone)]
 pub(crate) struct CA {
     pub db: crate::DBPool,
     pub validator: mobc::Pool<ValidatorManager>,
@@ -109,29 +115,45 @@ impl CA {
     }
 
     async fn complete_challenge_task(
-        &self, mut challenge: crate::models::AuthorizationChallenge, thumbprint: String, account_uri: String
+        &self, mut challenge: crate::models::AuthorizationChallenge, thumbprint: String,
+        account_uri: String, response: ChallengeResponse
     ) -> Result<(), backoff::Error<String>> {
         let mut conn = self.db.get().await.map_err(|e| e.to_string())?;
         let mut authorization: crate::models::Authorization = crate::schema::authorizations::table
             .find(challenge.authorization).get_result(&mut conn).await.map_err(|e| e.to_string())?;
 
-        let req = crate::cert_order::KeyValidationRequest {
-            token: challenge.token.clone().unwrap_or_default(),
-            account_thumbprint: thumbprint,
-            identifier: Some(authorization.id_to_pb()),
-            account_uri: Some(account_uri),
-            hs_private_key: vec![],
-        };
+
 
         let mut validator = self.validator.get().await.map_err(|e| e.to_string())?;
 
         match match challenge.type_ {
-            crate::models::ChallengeType::Http01 => validator.validate_http01(req).await,
-            crate::models::ChallengeType::Dns01 => validator.validate_dns01(req).await,
-            crate::models::ChallengeType::TlsAlpn01 => validator.validate_tlsalpn01(req).await,
+            crate::models::ChallengeType::Http01 | crate::models::ChallengeType::Dns01 |  crate::models::ChallengeType::TlsAlpn01 => {
+                let req = crate::cert_order::KeyValidationRequest {
+                    token: challenge.token.clone().unwrap_or_default(),
+                    account_thumbprint: thumbprint,
+                    identifier: Some(authorization.id_to_pb()),
+                    account_uri: Some(account_uri),
+                    hs_private_key: challenge.auth_key.clone().unwrap_or_default(),
+                };
+                match challenge.type_ {
+                    crate::models::ChallengeType::Http01 => validator.validate_http01(req).await,
+                    crate::models::ChallengeType::Dns01 => validator.validate_dns01(req).await,
+                    crate::models::ChallengeType::TlsAlpn01 => validator.validate_tlsalpn01(req).await,
+                    _ => unreachable!()
+                }
+            }
             crate::models::ChallengeType::OnionCsr01 => {
-                // TODO: implement
-                return Ok(())
+                let req = crate::cert_order::OnionCsrValidationRequest {
+                    csr: match response {
+                        ChallengeResponse::CSR(csr) => csr,
+                        _ => return Ok(())
+                    },
+                    ca_nonce: challenge.nonce.clone().unwrap_or_default(),
+                    identifier: Some(authorization.id_to_pb()),
+                    account_uri: Some(account_uri),
+                    hs_private_key: challenge.auth_key.clone().unwrap_or_default(),
+                };
+                validator.validate_onion_csr01(req).await
             }
         } {
             Ok(r) => {
@@ -555,9 +577,11 @@ impl CA {
         let mut rng = rand::thread_rng();
         let mut challenges = vec![];
 
+        let mut auth_key = [0u8; 32];
+        rng.fill(&mut auth_key);
+
         match identifier_type {
             crate::models::IdentifierType::Dns => {
-
                 let mut http_01_tok = [0u8; 32];
                 rng.fill(&mut http_01_tok);
                 let challenge_http_01 = crate::models::AuthorizationChallenge {
@@ -568,6 +592,8 @@ impl CA {
                     error: None,
                     type_: crate::models::ChallengeType::Http01,
                     token: Some(BASE64_URL_SAFE_NO_PAD.encode(&http_01_tok)),
+                    auth_key: Some(auth_key.to_vec()),
+                    nonce: None,
                 };
 
                 let mut tls_alpn_01_tok = [0u8; 32];
@@ -580,10 +606,27 @@ impl CA {
                     error: None,
                     type_: crate::models::ChallengeType::TlsAlpn01,
                     token: Some(BASE64_URL_SAFE_NO_PAD.encode(&tls_alpn_01_tok)),
+                    auth_key: Some(auth_key.to_vec()),
+                    nonce: None,
+                };
+
+                let mut onion_csr_01_nonce = [0u8; 16];
+                rng.fill(&mut onion_csr_01_nonce);
+                let challenge_onion_csr_01 = crate::models::AuthorizationChallenge {
+                    id: uuid::Uuid::new_v4(),
+                    authorization,
+                    validated_at: None,
+                    processing: false,
+                    error: None,
+                    type_: crate::models::ChallengeType::OnionCsr01,
+                    token: None,
+                    auth_key: Some(auth_key.to_vec()),
+                    nonce: Some(onion_csr_01_nonce.to_vec())
                 };
 
                 challenges.push(challenge_http_01);
                 challenges.push(challenge_tls_alpn_01);
+                challenges.push(challenge_onion_csr_01);
             }
         }
 
@@ -1025,12 +1068,18 @@ impl crate::cert_order::ca_server::Ca for CA {
 
         handle_db_result(diesel::update(&challenge).set(&challenge).execute(&mut conn).await)?;
 
+        let response = match request.response {
+            None => ChallengeResponse::None,
+            Some(crate::cert_order::complete_challenge_request::Response::Csr(csr)) => ChallengeResponse::CSR(csr)
+        };
+
         let t_challenge = challenge.clone();
         let t_self = self.clone();
         tokio::task::spawn(async move {
             let _ = backoff::future::retry(backoff::ExponentialBackoff::default(), || async {
                 t_self.complete_challenge_task(
-                    t_challenge.clone(), request.account_thumbprint.clone(), request.account_uri.clone()
+                    t_challenge.clone(), request.account_thumbprint.clone(), request.account_uri.clone(),
+                    response.clone()
                 ).await.map_err(|e| {
                     warn!("Failed to process challenge response: {}", e);
                     e

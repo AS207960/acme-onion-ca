@@ -104,6 +104,8 @@ pub struct AuthorizationChallenge {
     pub error: Option<serde_json::Value>,
     pub type_: ChallengeType,
     pub token: Option<String>,
+    pub auth_key: Option<Vec<u8>>,
+    pub nonce: Option<Vec<u8>>,
 }
 
 #[derive(Insertable, Queryable, Identifiable, Debug, Clone)]
@@ -269,8 +271,19 @@ impl AuthorizationChallenge {
             }),
             error: self.error.clone().and_then(|e| serde_json::from_value(e).ok()),
             token: self.token.clone(),
-            auth_key: vec![],
-            nonce: vec![],
+            auth_key: match &self.auth_key {
+                Some(ak) => {
+                    let ak = TryInto::<[u8; 32]>::try_into(ak.as_slice()).unwrap();
+                    let priv_key = x25519_dalek::StaticSecret::from(ak);
+                    let pub_key = x25519_dalek::PublicKey::from(&priv_key);
+                    pub_key.as_bytes().to_vec()
+                },
+                None => vec![]
+            },
+            nonce: match &self.nonce {
+                Some(n) => n.to_vec(),
+                None => vec![]
+            },
         }
     }
 }

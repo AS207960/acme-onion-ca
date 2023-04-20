@@ -10,6 +10,8 @@ diesel::table! {
         #[sql_name = "type"]
         type_ -> crate::models::ChallengeTypeMapping,
         token -> Nullable<Varchar>,
+        auth_key -> Nullable<Bytea>,
+        nonce -> Nullable<Bytea>,
     }
 }
 

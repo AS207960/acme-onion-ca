@@ -22,7 +22,14 @@ struct Config {
     validator_url: String,
     issuing_cert_id: uuid::Uuid,
     ct_logs: Vec<CTLog>,
-    signing_key: SigningKeyConf,
+    signing_key: SigningKey,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+enum SigningKey {
+    PKCS11(SigningKeyConf),
+    File(String)
 }
 
 #[derive(Deserialize, Debug)]
@@ -124,43 +131,69 @@ fn main() {
         }
     };
 
-    info!("Setting up HSM");
-    let engine_id = std::ffi::CString::new("pkcs11").unwrap();
-    let engine_pin_ctrl = std::ffi::CString::new("PIN").unwrap();
-    let engine_pin = std::ffi::CString::new(config.signing_key.pin).unwrap();
+    let private_key = match config.signing_key {
+        SigningKey::PKCS11(c) => {
+            info!("Setting up HSM");
+            let engine_id = std::ffi::CString::new("pkcs11").unwrap();
+            let engine_pin_ctrl = std::ffi::CString::new("PIN").unwrap();
+            let engine_pin = std::ffi::CString::new(c.pin).unwrap();
 
-    let pkcs11_engine = match (|| -> Result<_, openssl::error::ErrorStack> { unsafe {
-        openssl_sys::ENGINE_load_builtin_engines();
-        let engine = P11Engine(cvt_p(openssl_sys::ENGINE_by_id(engine_id.as_ptr()))?);
-        cvt(openssl_sys::ENGINE_init(*engine))?;
-        cvt(openssl_sys::ENGINE_ctrl_cmd_string(
-            *engine, engine_pin_ctrl.as_ptr(), engine_pin.as_ptr(), 1,
-        ))?;
-        Ok(engine)
-    }})() {
-        Ok(r) => r,
-        Err(e) => {
-            error!("Failed to setup PKCS#11 engine: {}", e);
-            std::process::exit(1);
-        }
-    };
+            let pkcs11_engine = match (|| -> Result<_, openssl::error::ErrorStack> {
+                unsafe {
+                    openssl_sys::ENGINE_load_builtin_engines();
+                    let engine = P11Engine(cvt_p(openssl_sys::ENGINE_by_id(engine_id.as_ptr()))?);
+                    cvt(openssl_sys::ENGINE_init(*engine))?;
+                    cvt(openssl_sys::ENGINE_ctrl_cmd_string(
+                        *engine, engine_pin_ctrl.as_ptr(), engine_pin.as_ptr(), 1,
+                    ))?;
+                    Ok(engine)
+                }
+            })() {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Failed to setup PKCS#11 engine: {}", e);
+                    std::process::exit(1);
+                }
+            };
 
-    let engine_key_id = std::ffi::CString::new(config.signing_key.key_id).unwrap();
-    let private_key = match (|| -> Result<_, openssl::error::ErrorStack> { unsafe {
-        use foreign_types_shared::ForeignType;
+            let engine_key_id = std::ffi::CString::new(c.key_id).unwrap();
+            let private_key = match (|| -> Result<_, openssl::error::ErrorStack> {
+                unsafe {
+                    use foreign_types_shared::ForeignType;
 
-        trace!("Loading OpenSSL UI");
-        let ui = cvt_p(openssl_sys::UI_OpenSSL())?;
-        trace!("Loading private key");
-        let priv_key = cvt_p(openssl_sys::ENGINE_load_private_key(
-            *pkcs11_engine, engine_key_id.as_ptr(), ui, std::ptr::null_mut(),
-        ))?;
-        Ok(openssl::pkey::PKey::<openssl::pkey::Private>::from_ptr(priv_key))
-    }})() {
-        Ok(r) => r,
-        Err(e) => {
-            error!("Failed to load key from HSM: {}", e);
-            std::process::exit(1);
+                    trace!("Loading OpenSSL UI");
+                    let ui = cvt_p(openssl_sys::UI_OpenSSL())?;
+                    trace!("Loading private key");
+                    let priv_key = cvt_p(openssl_sys::ENGINE_load_private_key(
+                        *pkcs11_engine, engine_key_id.as_ptr(), ui, std::ptr::null_mut(),
+                    ))?;
+                    Ok(openssl::pkey::PKey::<openssl::pkey::Private>::from_ptr(priv_key))
+                }
+            })() {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Failed to load key from HSM: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            private_key
+        },
+        SigningKey::File(p) => {
+            let data = match std::fs::read(p) {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Unable to read private key: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let private_key = match openssl::pkey::PKey::private_key_from_pem(&data) {
+                Ok(r) => r,
+                Err(e) => {
+                    error!("Unable to parse private key: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            private_key
         }
     };
 
