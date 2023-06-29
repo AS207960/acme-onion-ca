@@ -2,8 +2,10 @@
 name = "acme-onion-ca"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "MIT"
+repository = "https://github.com/as207960/acme-onion-ca"
+homepage = "https://acmeforonions.org"
+description = "A CA for issuing certificates to Onion hidden services, to be used in conjunction with Björn"
 
 [dependencies]
 diesel = { version = "2", features = ["uuid", "extras", "chrono", "postgres"] }
