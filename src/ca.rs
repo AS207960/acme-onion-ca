@@ -496,10 +496,20 @@ impl CA {
             invalidity_date: None,
         };
         order.certificate = Some(certificate.id);
+        let certificate_identifiers = identifiers.iter().map(|i| {
+            crate::models::CertificateIdentifier {
+                id: uuid::Uuid::new_v4(),
+                certificate_id: certificate.id,
+                identifier_type: i.identifier_type,
+                identifier: i.identifier.clone(),
+            }
+        }).collect::<Vec<_>>();
 
         conn.transaction(|mut conn| Box::pin(async move {
             diesel::insert_into(crate::schema::certificate::table)
                 .values(&certificate).execute(&mut conn).await?;
+            diesel::insert_into(crate::schema::certificate_identifiers::table)
+                .values(&certificate_identifiers).execute(&mut conn).await?;
             diesel::update(&order).set(&order).execute(&mut conn).await?;
             Ok(())
         })).await.map_err(|e: diesel::result::Error| e.to_string())?;
@@ -530,12 +540,12 @@ impl CA {
                 };
 
                 for l in name.iter() {
-                    if l.contains(&b'*') {
+                    if l.contains(&b'*') && l != b"*" {
                         return Err(crate::cert_order::Error {
                             error_type: crate::cert_order::ErrorType::RejectedIdentifierError.into(),
                             status: 400,
                             title: "Unsupported identifier".to_string(),
-                            detail: "Wildcard identifiers are not supported".to_string(),
+                            detail: "Partial wildcard identifiers are not supported".to_string(),
                             identifier: Some(identifier),
                             instance: None,
                             sub_problems: vec![]
@@ -572,7 +582,8 @@ impl CA {
     }
 
     fn make_challenges(
-        authorization: uuid::Uuid, identifier_type: crate::models::IdentifierType
+        authorization: uuid::Uuid,
+        identifier_type: crate::models::IdentifierType, identifier: &str
     ) -> Vec<crate::models::AuthorizationChallenge> {
         let mut rng = rand::thread_rng();
         let mut challenges = vec![];
@@ -582,37 +593,41 @@ impl CA {
 
         match identifier_type {
             crate::models::IdentifierType::Dns => {
-                let mut http_01_tok = [0u8; 32];
-                rng.fill(&mut http_01_tok);
-                let challenge_http_01 = crate::models::AuthorizationChallenge {
-                    id: uuid::Uuid::new_v4(),
-                    authorization,
-                    validated_at: None,
-                    processing: false,
-                    error: None,
-                    type_: crate::models::ChallengeType::Http01,
-                    token: Some(BASE64_URL_SAFE_NO_PAD.encode(&http_01_tok)),
-                    auth_key: Some(auth_key.to_vec()),
-                    nonce: None,
-                };
+                let is_wildcard = identifier.contains('*');
 
-                let mut tls_alpn_01_tok = [0u8; 32];
-                rng.fill(&mut tls_alpn_01_tok);
-                let challenge_tls_alpn_01 = crate::models::AuthorizationChallenge {
-                    id: uuid::Uuid::new_v4(),
-                    authorization,
-                    validated_at: None,
-                    processing: false,
-                    error: None,
-                    type_: crate::models::ChallengeType::TlsAlpn01,
-                    token: Some(BASE64_URL_SAFE_NO_PAD.encode(&tls_alpn_01_tok)),
-                    auth_key: Some(auth_key.to_vec()),
-                    nonce: None,
-                };
+                if !is_wildcard {
+                    let mut http_01_tok = [0u8; 32];
+                    rng.fill(&mut http_01_tok);
+                    challenges.push(crate::models::AuthorizationChallenge {
+                        id: uuid::Uuid::new_v4(),
+                        authorization,
+                        validated_at: None,
+                        processing: false,
+                        error: None,
+                        type_: crate::models::ChallengeType::Http01,
+                        token: Some(BASE64_URL_SAFE_NO_PAD.encode(&http_01_tok)),
+                        auth_key: Some(auth_key.to_vec()),
+                        nonce: None,
+                    });
+
+                    let mut tls_alpn_01_tok = [0u8; 32];
+                    rng.fill(&mut tls_alpn_01_tok);
+                    challenges.push(crate::models::AuthorizationChallenge {
+                        id: uuid::Uuid::new_v4(),
+                        authorization,
+                        validated_at: None,
+                        processing: false,
+                        error: None,
+                        type_: crate::models::ChallengeType::TlsAlpn01,
+                        token: Some(BASE64_URL_SAFE_NO_PAD.encode(&tls_alpn_01_tok)),
+                        auth_key: Some(auth_key.to_vec()),
+                        nonce: None,
+                    });
+                }
 
                 let mut onion_csr_01_nonce = [0u8; 16];
                 rng.fill(&mut onion_csr_01_nonce);
-                let challenge_onion_csr_01 = crate::models::AuthorizationChallenge {
+                challenges.push(crate::models::AuthorizationChallenge {
                     id: uuid::Uuid::new_v4(),
                     authorization,
                     validated_at: None,
@@ -622,11 +637,7 @@ impl CA {
                     token: None,
                     auth_key: Some(auth_key.to_vec()),
                     nonce: Some(onion_csr_01_nonce.to_vec())
-                };
-
-                challenges.push(challenge_http_01);
-                challenges.push(challenge_tls_alpn_01);
-                challenges.push(challenge_onion_csr_01);
+                });
             }
         }
 
@@ -755,7 +766,7 @@ impl crate::cert_order::ca_server::Ca for CA {
             };
 
             challenges.append(&mut Self::make_challenges(
-                authorization.id, identifier.identifier_type
+                authorization.id, identifier.identifier_type, &identifier.identifier,
             ));
             authorizations.push(authorization);
         }
@@ -950,8 +961,12 @@ impl crate::cert_order::ca_server::Ca for CA {
             }))
         };
 
+        let authorization_id = uuid::Uuid::new_v4();
+        let challenges = Self::make_challenges(
+            authorization_id, identifier_type, &identifier,
+        );
         let authorization = crate::models::Authorization {
-            id: uuid::Uuid::new_v4(),
+            id: authorization_id,
             acme_account_id: request.account_id.clone(),
             state: crate::models::AuthorizationState::Pending,
             expires_at: expiry.clone(),
@@ -960,9 +975,6 @@ impl crate::cert_order::ca_server::Ca for CA {
             identifier_type,
             identifier,
         };
-        let challenges = Self::make_challenges(
-            authorization.id, identifier_type
-        );
 
         let mut conn = self.get_db_conn().await?;
 
