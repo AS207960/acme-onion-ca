@@ -423,7 +423,7 @@ impl CA {
         };
         let mut scts = crate::sct::SCTList::new();
         for log in &ct_logs {
-            match self.http_client.post(format!("{}/ct/v1/add-pre-chain", log))
+            match self.http_client.post(log.join("/ct/v1/add-pre-chain"))
                 .json(&add_pre_chain)
                 .send().await.and_then(|r| r.error_for_status()) {
                 Ok(r) => {
@@ -473,7 +473,7 @@ impl CA {
             chain: ee_chain
         };
         for log in &ct_logs {
-            match self.http_client.post(format!("{}/ct/v1/add-chain", log))
+            match self.http_client.post(log.join("/ct/v1/add-chain"))
                 .json(&add_ee_chain)
                 .send().await.map(|r| r.error_for_status()) {
                 Ok(_) => {},
