@@ -10,8 +10,14 @@ impl crate::cert_order::ocsp_server::Ocsp for crate::ca::CA {
         let request = request.into_inner();
         let now = Utc::now();
 
+        let serial = if request.serial_number[0] == 0 {
+            &request.serial_number[1..]
+        } else {
+            &request.serial_number
+        };
+
         debug!("OCSP request for serial number {:?}", request.serial_number);
-        let cert_id = match uuid::Uuid::from_slice(&request.serial_number) {
+        let cert_id = match uuid::Uuid::from_slice(serial) {
             Ok(id) => id,
             Err(_) => return Ok(tonic::Response::new(crate::cert_order::CheckCertResponse {
                 status: crate::cert_order::CertStatus::CertUnissued.into(),
