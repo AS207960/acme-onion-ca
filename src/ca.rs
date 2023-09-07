@@ -291,6 +291,7 @@ impl CA {
             .map_err(|e| format!("failed to add AKI: {}", e))?;
 
         if let Some(crl_url) = &issued_by.crl_url {
+            #[allow(deprecated)]
             let cdp = openssl::x509::X509Extension::new_nid(
                 None,
                 None,
@@ -309,6 +310,7 @@ impl CA {
             aia.push(format!("OCSP;URI:{}", ocsp_url));
         }
         if !aia.is_empty() {
+            #[allow(deprecated)]
             let aia = openssl::x509::X509Extension::new_nid(
                 None,
                 None,
@@ -387,11 +389,10 @@ impl CA {
             &issuer_cert
         )?;
 
-        let poison = openssl::x509::X509Extension::new(
-            None,
-            None,
-            "1.3.6.1.4.1.11129.2.4.3",
-            "critical,DER:05:00"
+        let poison = openssl::x509::X509Extension::new_from_der(
+            &openssl::asn1::Asn1Object::from_str("1.3.6.1.4.1.11129.2.4.3").unwrap(),
+            true,
+            &openssl::asn1::Asn1OctetString::new_from_bytes(&[0x05, 0x00]).unwrap()
         ).map_err(|e| format!("failed to build PreCert Poison: {}", e))?;
         builder.append_extension(poison)
             .map_err(|e| format!("failed to add PreCert Poison: {}", e))?;
@@ -451,11 +452,10 @@ impl CA {
         )?;
 
         let scts_asn1 = scts.encode_asn1();
-        let scts_ext = openssl::x509::X509Extension::new(
-            None,
-            None,
-            "1.3.6.1.4.1.11129.2.4.2",
-            &format!("DER:{}", hex::encode(scts_asn1))
+        let scts_ext = openssl::x509::X509Extension::new_from_der(
+            &openssl::asn1::Asn1Object::from_str("1.3.6.1.4.1.11129.2.4.2").unwrap(),
+            false,
+            &openssl::asn1::Asn1OctetString::new_from_bytes(&scts_asn1).unwrap()
         ).map_err(|e| format!("failed to build SCT list: {}", e))?;
         builder.append_extension(scts_ext)
             .map_err(|e| format!("failed to add SCT list: {}", e))?;

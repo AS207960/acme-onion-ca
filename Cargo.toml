@@ -43,4 +43,4 @@ tonic-build = "0.9"
 prost-wkt-build = "0.4"
 
 [patch.crates-io]
-openssl-sys = { git = "https://github.com/AS207960/rust-openssl", rev = "4d9f58286a60db8ea43a8682b4b05ace19f3a65e" }
+openssl-sys = { git = "https://github.com/AS207960/rust-openssl", rev = "68443018c79e6771039584e4f0c8458ac679a537" }
