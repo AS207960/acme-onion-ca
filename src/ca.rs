@@ -306,8 +306,10 @@ impl CA {
         if let Some(cert_url) = &issued_by.cert_url {
             aia.push(format!("caIssuers;URI:{}", cert_url));
         }
-        if let Some(ocsp_url) = &issued_by.ocsp_responder_url {
-            aia.push(format!("OCSP;URI:{}", ocsp_url));
+        for ocsp_url in &issued_by.ocsp_responder_url {
+            if let Some(ocsp_url) = ocsp_url {
+                aia.push(format!("OCSP;URI:{}", ocsp_url));
+            }
         }
         if !aia.is_empty() {
             #[allow(deprecated)]

@@ -36,7 +36,7 @@ pub struct IssuingCert {
     pub cert: Vec<u8>,
     pub crl_url: Option<String>,
     pub cert_url: Option<String>,
-    pub ocsp_responder_url: Option<String>
+    pub ocsp_responder_url: Vec<Option<String>>
 }
 
 #[derive(Insertable, Queryable, Identifiable, AsChangeset, Debug, Clone)]

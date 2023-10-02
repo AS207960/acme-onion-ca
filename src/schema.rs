@@ -59,7 +59,7 @@ diesel::table! {
         cert -> Bytea,
         crl_url -> Nullable<Text>,
         cert_url -> Nullable<Text>,
-        ocsp_responder_url -> Nullable<Text>,
+        ocsp_responder_url -> Array<Nullable<Text>>,
     }
 }
 
