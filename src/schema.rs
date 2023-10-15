@@ -77,6 +77,7 @@ diesel::table! {
         order_id -> Uuid,
         identifier_type -> crate::models::IdentifierTypeMapping,
         identifier -> Text,
+        authorization -> Nullable<Uuid>,
     }
 }
 
@@ -87,6 +88,7 @@ diesel::table! {
         expires_at -> Timestamp,
         csr -> Nullable<Bytea>,
         certificate -> Nullable<Uuid>,
+        error -> Nullable<Jsonb>,
     }
 }
 

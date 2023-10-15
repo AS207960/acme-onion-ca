@@ -69,7 +69,8 @@ pub struct Order {
     pub acme_account_id: String,
     pub expires_at: NaiveDateTime,
     pub csr: Option<Vec<u8>>,
-    pub certificate: Option<uuid::Uuid>
+    pub certificate: Option<uuid::Uuid>,
+    pub error: Option<serde_json::Value>,
 }
 
 #[derive(Insertable, Queryable, Identifiable, Debug, Clone)]
@@ -79,6 +80,7 @@ pub struct OrderIdentifier {
     pub order_id: uuid::Uuid,
     pub identifier_type: IdentifierType,
     pub identifier: String,
+    pub authorization: Option<uuid::Uuid>,
 }
 
 #[derive(Insertable, Queryable, Identifiable, AsChangeset, Debug, Clone)]
@@ -138,6 +140,8 @@ impl Order {
     pub fn pb_status(&self, authorizations: &[Authorization]) -> crate::cert_order::OrderStatus {
         if self.certificate.is_some() {
             crate::cert_order::OrderStatus::OrderValid
+        } else if self.error.is_some() {
+            crate::cert_order::OrderStatus::OrderInvalid
         } else if self.csr.is_some() {
             crate::cert_order::OrderStatus::OrderProcessing
         } else if self.expires_at <= Utc::now().naive_utc() {
@@ -171,7 +175,8 @@ impl Order {
             expires: Some(self.get_expires_at()),
             status: self.pb_status(&authorizations).into(),
             authorizations: authorizations.iter().map(|a| a.id.as_bytes().to_vec()).collect(),
-            certificate_id: self.certificate.map(|i| i.as_bytes().to_vec())
+            certificate_id: self.certificate.map(|i| i.as_bytes().to_vec()),
+            error: self.error.clone().and_then(|e| serde_json::from_value(e).ok()),
         })
     }
 }

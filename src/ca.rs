@@ -116,13 +116,11 @@ impl CA {
 
     async fn complete_challenge_task(
         &self, mut challenge: crate::models::AuthorizationChallenge, thumbprint: String,
-        account_uri: String, response: ChallengeResponse
+        response: ChallengeResponse
     ) -> Result<(), backoff::Error<String>> {
         let mut conn = self.db.get().await.map_err(|e| e.to_string())?;
         let mut authorization: crate::models::Authorization = crate::schema::authorizations::table
             .find(challenge.authorization).get_result(&mut conn).await.map_err(|e| e.to_string())?;
-
-
 
         let mut validator = self.validator.get().await.map_err(|e| e.to_string())?;
 
@@ -132,7 +130,6 @@ impl CA {
                     token: challenge.token.clone().unwrap_or_default(),
                     account_thumbprint: thumbprint,
                     identifier: Some(authorization.id_to_pb()),
-                    account_uri: Some(account_uri),
                     hs_private_key: challenge.auth_key.clone().unwrap_or_default(),
                 };
                 match challenge.type_ {
@@ -150,8 +147,6 @@ impl CA {
                     },
                     ca_nonce: challenge.nonce.clone().unwrap_or_default(),
                     identifier: Some(authorization.id_to_pb()),
-                    account_uri: Some(account_uri),
-                    hs_private_key: challenge.auth_key.clone().unwrap_or_default(),
                 };
                 validator.validate_onion_csr01(req).await
             }
@@ -246,7 +241,8 @@ impl CA {
         let mut ku = openssl::x509::extension::KeyUsage::new();
         ku.critical();
         ku.digital_signature();
-        ku.key_encipherment();
+        ku.non_repudiation();
+        ku.key_agreement();
         let ku = ku.build()
             .map_err(|e| format!("failed to build key usage: {}", e))?;
         builder.append_extension(ku)
@@ -327,7 +323,8 @@ impl CA {
     }
 
     async fn sign_order_task(
-        &self, mut order: crate::models::Order
+        &self, mut order: crate::models::Order, account_uri: String,
+        onion_caa: std::collections::HashMap<String, crate::cert_order::OnionCaa>
     ) -> Result<(), backoff::Error<String>> {
         let csr = match &order.csr {
             Some(csr) => csr,
@@ -356,6 +353,87 @@ impl CA {
             return Ok(());
         }
 
+        let mut validator = self.validator.get().await.map_err(|e| e.to_string())?;
+
+        for identifier in &identifiers {
+            let authorization_id = match identifier.authorization {
+                Some(id) => id,
+                None => {
+                    order.error = Some(serde_json::to_value(crate::cert_order::ErrorResponse {
+                        errors: vec![crate::cert_order::Error {
+                            error_type: crate::cert_order::ErrorType::CaaError.into(),
+                            title: "Unable to check CAA".to_string(),
+                            status: 500,
+                            detail: "Internal server error when checking CAA".to_string(),
+                            identifier: None,
+                            instance: None,
+                            sub_problems: vec![]
+                        }]
+                    }).unwrap());
+                    diesel::update(&order).set(&order).execute(&mut conn).await.map_err(|e| e.to_string())?;
+                    return Ok(());
+                }
+            };
+
+            let authorization_challenge: crate::models::AuthorizationChallenge =
+                crate::schema::authorization_challenges::table.filter(
+                    crate::schema::authorization_challenges::dsl::authorization.eq(&authorization_id)
+                ).filter(
+                    crate::schema::authorization_challenges::dsl::validated_at.is_not_null()
+                ).get_result(&mut conn).await.map_err(|e| e.to_string())?;
+
+            let onion_caa_set = if identifier.identifier_type == crate::models::IdentifierType::Dns &&
+                identifier.identifier.ends_with(".onion") {
+                let i = &identifier.identifier[..identifier.identifier.len() - ".onion".len()];
+                let i = match i.rsplit_once(".") {
+                    Some((_, i)) => i,
+                    None => i
+                };
+
+                onion_caa.get(i).map(|o| o.clone())
+            } else {
+                None
+            };
+
+            match validator.check_caa(crate::cert_order::CaaCheckRequest {
+                validation_method: match authorization_challenge.type_ {
+                    crate::models::ChallengeType::Http01 => crate::cert_order::ValidationMethod::Http01.into(),
+                    crate::models::ChallengeType::Dns01 => crate::cert_order::ValidationMethod::Dns01.into(),
+                    crate::models::ChallengeType::TlsAlpn01 => crate::cert_order::ValidationMethod::TlsAlpn01.into(),
+                    crate::models::ChallengeType::OnionCsr01 => crate::cert_order::ValidationMethod::OnionCsr01.into(),
+                },
+                identifier: Some(identifier.to_pb()),
+                account_uri: Some(account_uri.clone()),
+                hs_private_key: authorization_challenge.auth_key.unwrap_or_default(),
+                onion_caa: onion_caa_set
+            }).await {
+                Ok(r) => {
+                    let r = r.into_inner();
+                    if !r.valid {
+                        order.error = Some(serde_json::to_value(r.error).unwrap());
+                        diesel::update(&order).set(&order).execute(&mut conn).await.map_err(|e| e.to_string())?;
+                        return Ok(());
+                    }
+                },
+                Err(e) => {
+                    warn!("CAA check failed: {}", e);
+                    order.error = Some(serde_json::to_value(crate::cert_order::ErrorResponse {
+                        errors: vec![crate::cert_order::Error {
+                            error_type: crate::cert_order::ErrorType::ServerInternalError.into(),
+                            title: "Internal Server Error".to_string(),
+                            status: 500,
+                            detail: "CAA check unexpectedly failed".to_string(),
+                            identifier: None,
+                            instance: None,
+                            sub_problems: vec![]
+                        }]
+                    }).unwrap());
+                    diesel::update(&order).set(&order).execute(&mut conn).await.map_err(|e| e.to_string())?;
+                    return Ok(());
+                }
+            }
+        }
+
         let cert_id = uuid::Uuid::new_v4();
         let now = Utc::now();
         let expiry = now + chrono::Duration::days(90);
@@ -374,14 +452,38 @@ impl CA {
                     256 => openssl::hash::MessageDigest::sha256(),
                     384 => openssl::hash::MessageDigest::sha384(),
                     512 => openssl::hash::MessageDigest::sha512(),
-                    _ => return Err(backoff::Error::Permanent(
-                        format!("unsupported ECDSA key size: {}", ec_key.group().order_bits())
-                    ))
+                    _ => {
+                        order.error = Some(serde_json::to_value(crate::cert_order::ErrorResponse {
+                            errors: vec![crate::cert_order::Error {
+                                error_type: crate::cert_order::ErrorType::BadCsrError.into(),
+                                title: "Invalid key".to_string(),
+                                status: 400,
+                                detail: format!("unsupported ECDSA key size: {}", ec_key.group().order_bits()),
+                                identifier: None,
+                                instance: None,
+                                sub_problems: vec![]
+                            }]
+                        }).unwrap());
+                        diesel::update(&order).set(&order).execute(&mut conn).await.map_err(|e| e.to_string())?;
+                        return Ok(());
+                    }
                 }
             },
-            _ => return Err(backoff::Error::Permanent(
-                format!("unsupported issuer public key type: {:?}", issuer_pub_key.id())
-            ))
+            _ => {
+                order.error = Some(serde_json::to_value(crate::cert_order::ErrorResponse {
+                    errors: vec![crate::cert_order::Error {
+                        error_type: crate::cert_order::ErrorType::BadCsrError.into(),
+                        title: "Invalid key".to_string(),
+                        status: 400,
+                        detail: format!("unsupported issuer public key type: {:?}", issuer_pub_key.id()),
+                        identifier: None,
+                        instance: None,
+                        sub_problems: vec![]
+                    }]
+                }).unwrap());
+                diesel::update(&order).set(&order).execute(&mut conn).await.map_err(|e| e.to_string())?;
+                return Ok(())
+            }
         };
 
         let mut builder = openssl::x509::X509Builder::new()
@@ -680,6 +782,7 @@ impl crate::cert_order::ca_server::Ca for CA {
             expires_at: expiry.clone(),
             csr: None,
             certificate: None,
+            error: None,
         };
 
         let mut errors = vec![];
@@ -692,6 +795,7 @@ impl crate::cert_order::ca_server::Ca for CA {
                     order_id: order.id,
                     identifier_type: t,
                     identifier: i,
+                    authorization: None,
                 }),
                 Err(e) => errors.push(e),
             }
@@ -736,7 +840,7 @@ impl crate::cert_order::ca_server::Ca for CA {
         let mut existing_authorizations = vec![];
         let mut challenges = vec![];
 
-        'outer: for identifier in &identifiers {
+        'outer: for identifier in &mut identifiers {
             let account_authorizations: Vec<crate::models::Authorization> =
                 handle_db_result(crate::schema::authorizations::table
                     .filter(
@@ -751,6 +855,7 @@ impl crate::cert_order::ca_server::Ca for CA {
                 let s = ea.pb_status();
                 if s == crate::cert_order::AuthorizationStatus::AuthorizationValid ||
                     s == crate::cert_order::AuthorizationStatus::AuthorizationPending {
+                    identifier.authorization = Some(ea.id);
                     existing_authorizations.push(ea);
                     continue 'outer;
                 }
@@ -766,6 +871,7 @@ impl crate::cert_order::ca_server::Ca for CA {
                 identifier_type: identifier.identifier_type,
                 identifier: identifier.identifier.clone()
             };
+            identifier.authorization = Some(authorization.id);
 
             challenges.append(&mut Self::make_challenges(
                 authorization.id, identifier.identifier_type, &identifier.identifier,
@@ -776,10 +882,6 @@ impl crate::cert_order::ca_server::Ca for CA {
         let order = handle_db_result(conn.transaction(|mut conn| Box::pin(async move {
             diesel::insert_into(crate::schema::orders::dsl::orders)
                 .values(&order).execute(&mut conn).await?;
-            for identifier in &identifiers {
-                diesel::insert_into(crate::schema::order_identifiers::dsl::order_identifiers)
-                    .values(identifier).execute(&mut conn).await?;
-            }
             for authorization in &authorizations {
                 diesel::insert_into(crate::schema::authorizations::dsl::authorizations)
                     .values(authorization).execute(&mut conn).await?;
@@ -789,6 +891,10 @@ impl crate::cert_order::ca_server::Ca for CA {
                         order: order.id,
                         authorization: authorization.id,
                     }).execute(&mut conn).await?;
+            }
+            for identifier in &identifiers {
+                diesel::insert_into(crate::schema::order_identifiers::dsl::order_identifiers)
+                    .values(identifier).execute(&mut conn).await?;
             }
             for authorization in &existing_authorizations {
                 diesel::insert_into(crate::schema::order_authorization::dsl::order_authorization)
@@ -931,7 +1037,9 @@ impl crate::cert_order::ca_server::Ca for CA {
         let t_self = self.clone();
         tokio::task::spawn(async move {
             let _ = backoff::future::retry(backoff::ExponentialBackoff::default(), || async {
-                t_self.sign_order_task(t_order.clone()).await.map_err(|e| {
+                t_self.sign_order_task(
+                    t_order.clone(), request.account_uri.clone(), request.onion_caa.clone()
+                ).await.map_err(|e| {
                     warn!("Failed to sign order: {}", e);
                     e
                 })
@@ -1092,8 +1200,7 @@ impl crate::cert_order::ca_server::Ca for CA {
         tokio::task::spawn(async move {
             let _ = backoff::future::retry(backoff::ExponentialBackoff::default(), || async {
                 t_self.complete_challenge_task(
-                    t_challenge.clone(), request.account_thumbprint.clone(), request.account_uri.clone(),
-                    response.clone()
+                    t_challenge.clone(), request.account_thumbprint.clone(), response.clone()
                 ).await.map_err(|e| {
                     warn!("Failed to process challenge response: {}", e);
                     e
