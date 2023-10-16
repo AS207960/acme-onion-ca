@@ -389,8 +389,9 @@ impl CA {
                     Some((_, i)) => i,
                     None => i
                 };
+                let i = format!("{}.onion", i);
 
-                onion_caa.get(i).map(|o| o.clone())
+                onion_caa.get(&i).map(|o| o.clone())
             } else {
                 None
             };
