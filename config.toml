@@ -54,3 +54,15 @@ url = "https://ct.googleapis.com/logs/eu1/solera2024/"
 [ct_logs.expiry_range]
 start = "2024-01-01T00:00:00Z"
 end = "2025-01-01T00:00:00Z"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/eu1/solera2025h1/"
+[ct_logs.expiry_range]
+start = "2025-01-01T00:00:00Z"
+end = "2025-07-01T00:00:00Z"
+
+[[ct_logs]]
+url = "https://ct.googleapis.com/logs/eu1/solera2025h2/"
+[ct_logs.expiry_range]
+start = "2025-07-01T00:00:00Z"
+end = "2026-01-01T00:00:00Z"
