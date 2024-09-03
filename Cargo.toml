@@ -29,7 +29,7 @@ trust-dns-proto = "0.22"
 rand = "0.8"
 base64 = "0.21"
 openssl = "0.10"
-openssl-sys = "0.9"
+openssl-sys = "0.9.93"
 backoff = { version = "0.4", features = ["tokio"] }
 reqwest = { version = "0.11", features = ["json"] }
 byteorder = "1"
@@ -43,4 +43,4 @@ tonic-build = "0.9"
 prost-wkt-build = "0.4"
 
 [patch.crates-io]
-openssl-sys = { git = "https://github.com/AS207960/rust-openssl", rev = "68443018c79e6771039584e4f0c8458ac679a537" }
+openssl-sys = { git = "https://github.com/AS207960/rust-openssl", rev = "1da47a7e9af19a40d5752cb7f5bd25af982b6541" }
