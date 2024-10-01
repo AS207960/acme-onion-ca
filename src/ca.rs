@@ -45,7 +45,7 @@ impl CA {
             Ok(c) => Ok(c),
             Err(e) => {
                 warn!("Failed to get DB connection: {}", e);
-                return Err(tonic::Status::internal(""));
+                Err(tonic::Status::internal(""))
             }
         }
     }
@@ -204,8 +204,6 @@ impl CA {
         let issuer_name = issuer_cert.subject_name();
         let mut subject_name = openssl::x509::X509NameBuilder::new()
             .map_err(|e| format!("failed to build subject name: {}", e))?;
-        subject_name.append_entry_by_nid(openssl::nid::Nid::COMMONNAME, &identifiers[0].identifier)
-            .map_err(|e| format!("failed to add common name: {}", e))?;
         let subject_name = subject_name.build();
 
         builder.set_version(2)
@@ -257,6 +255,10 @@ impl CA {
             .map_err(|e| format!("failed to add extended key usage: {}", e))?;
 
         let mut san = openssl::x509::extension::SubjectAlternativeName::new();
+        // RFC 5280 § 4.1.2.6 - If subject naming information is present only in the subjectAltName
+        // extension then the subject name MUST be an empty sequence and the subjectAltName
+        // extension MUST be critical.
+        san.critical();
         for id in identifiers {
             match id.identifier_type {
                 crate::models::IdentifierType::Dns => {
