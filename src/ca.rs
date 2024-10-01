@@ -202,7 +202,7 @@ impl CA {
             .map_err(|e| format!("failed to make cert ID: {}", e))?;
 
         let issuer_name = issuer_cert.subject_name();
-        let mut subject_name = openssl::x509::X509NameBuilder::new()
+        let subject_name = openssl::x509::X509NameBuilder::new()
             .map_err(|e| format!("failed to build subject name: {}", e))?;
         let subject_name = subject_name.build();
 
@@ -239,7 +239,6 @@ impl CA {
         let mut ku = openssl::x509::extension::KeyUsage::new();
         ku.critical();
         ku.digital_signature();
-        ku.non_repudiation();
         ku.key_agreement();
         let ku = ku.build()
             .map_err(|e| format!("failed to build key usage: {}", e))?;
