@@ -37,6 +37,7 @@ hex = "0.4"
 libc = "0.2"
 foreign-types-shared = "0.1"
 x25519-dalek = "1"
+futures = "0.3.31"
 
 [build-dependencies]
 tonic-build = "0.9"

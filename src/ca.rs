@@ -4,6 +4,7 @@ use base64::prelude::*;
 use diesel_async::{RunQueryDsl, AsyncConnection};
 use rand::Rng;
 use std::str::FromStr;
+use std::ops::Deref;
 
 pub struct ValidatorManager {
     pub endpoint: tonic::transport::Endpoint,
@@ -525,29 +526,53 @@ impl CA {
 
         let mut pre_chain = vec![BASE64_STANDARD.encode(pre_cert_bytes)];
         pre_chain.append(&mut chain_bytes.clone());
-        let add_pre_chain = crate::sct::CTAddChain {
+        let add_pre_chain = std::sync::Arc::new(crate::sct::CTAddChain {
             chain: pre_chain
-        };
-        let mut scts = crate::sct::SCTList::new();
+        });
+        let mut results = vec![];
         for log in &ct_logs {
-            match self.http_client.post(log.join("ct/v1/add-pre-chain").unwrap())
-                .json(&add_pre_chain)
-                .send().await.and_then(|r| r.error_for_status()) {
-                Ok(r) => {
+            results.push((|| {
+                let log = (*log).to_owned();
+                let add_pre_chain = add_pre_chain.clone();
+                async move {
+                    let r = match self.http_client.post(log.join("ct/v1/add-pre-chain").unwrap())
+                        .json(add_pre_chain.deref())
+                        .send().await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            warn!("Failed to submit pre-certificate to {}: {}", log, e);
+                            return Err(backoff::Error::transient(e.to_string()));
+                        }
+                    };
+                    let status = r.status();
                     let resp = r.text().await
                         .map_err(|e| format!("failed to get SCT response: {}", e))?;
+                    if !status.is_success() {
+                        warn!("Failed to submit pre-certificate to {}: {}", log, status);
+                        warn!("Response body: {}", resp);
+                        return Err(backoff::Error::transient(status.to_string()));
+                    }
                     let sct: crate::sct::JsonSCT = serde_json::from_str(&resp)
                         .map_err(|e| format!("failed to parse SCT response: {}, got: {}", e, resp))?;
-                    scts.push(
-                        sct.parse()
-                            .map_err(|e| format!("failed to parse SCT response: {}", e))?
-                    );
-                },
-                Err(e) => {
-                    warn!("Failed to submit pre-certificate to {}: {}", log, e);
-                    return Err(backoff::Error::transient(e.to_string()));
+                    let sct = sct.parse()
+                        .map_err(|e| format!("failed to parse SCT response: {}", e))?;
+                    Ok(sct)
                 }
-            }
+            })());
+        }
+        let results = futures::future::join_all(results).await;
+        let success_scts = results.into_iter()
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>();
+
+        if success_scts.len() < 3 {
+            warn!("Didn't get enough SCTs, only {} inclusion requests were successful", success_scts.len());
+            return Err(backoff::Error::transient("not enough SCTs".to_string()));
+        }
+
+        let mut scts = crate::sct::SCTList::new();
+        for sct in success_scts {
+            scts.push(sct);
         }
 
         let mut builder = openssl::x509::X509Builder::new()
@@ -579,14 +604,21 @@ impl CA {
             chain: ee_chain
         };
         for log in &ct_logs {
-            match self.http_client.post(log.join("ct/v1/add-chain").unwrap())
+            let r = match self.http_client.post(log.join("ct/v1/add-chain").unwrap())
                 .json(&add_ee_chain)
-                .send().await.map(|r| r.error_for_status()) {
-                Ok(_) => {},
+                .send().await {
+                Ok(r) => r,
                 Err(e) => {
                     warn!("Failed to submit certificate to {}: {}", log, e);
-                    return Err(backoff::Error::transient(e.to_string()));
+                    continue;
                 }
+            };
+            let status = r.status();
+            let resp = r.text().await
+                .map_err(|e| format!("failed to get log response: {}", e))?;
+            if !status.is_success() {
+                warn!("Failed to submit certificate to {}: {}", log, status);
+                warn!("Response body: {}", resp);
             }
         }
 
